@@ -11,13 +11,13 @@
 		"trim_trailing_white_space_on_save": true,
 		"translate_tabs_to_spaces": true,
 		// "auto_complete": false,
-		"show_errors_inline": false,
+		// "show_errors_inline": false,
 	},
 	"build_systems":
 	[
 		{
-			"name": "build.bat",
-			"shell_cmd": "build.bat",
+			"name": "build_msvc.bat",
+			"shell_cmd": "build_msvc.bat",
 			"file_regex": "^(..[^:\n]+)\\(([0-9]+),?([0-9]+)?\\):? ?(.*)$",
 		}
 	],

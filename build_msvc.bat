@@ -42,7 +42,11 @@ rem )
 
 set CL=/W4 /WX /Zi /Od /Gm- /diagnostics:caret /options:strict /DWIN32 /D_CRT_SECURE_NO_WARNINGS
 rem set CL=%CL% /fsanitize=address
-set LINK=/INCREMENTAL:NO /SUBSYSTEM:WINDOWS kernel32.lib
+
+set LINK=/INCREMENTAL:NO
+rem set "LINK=%LINK% /SUBSYSTEM:WINDOWS"
+set "LINK=%LINK% kernel32.lib"
+set "LINK=%LINK% d3d11.lib d3dcompiler.lib"
 
 
 rem
@@ -54,7 +58,9 @@ rem set "BARERG_DEV_FLAGS=%BARERG_DEV_FLAGS% /O2 /arch:AVX2"
 rem set "BARERG_DEV_FLAGS=%BARERG_DEV_FLAGS% /DNDEBUG"
 rem set "BARERG_DEV_FLAGS=%BARERG_DEV_FLAGS% /DTRACY_ENABLE"
 
-del barerg.pdb >nul 2>&1 & cl.exe /nologo /MP %BARERG_DEV_FLAGS% /Iimgui barerg.cpp /link
+set "IMGUI_SRC_FILE_LIST=imgui\imgui.cpp imgui\imgui_demo.cpp imgui\imgui_draw.cpp imgui\imgui_tables.cpp imgui\imgui_widgets.cpp imgui\backends\imgui_impl_dx11.cpp imgui\backends\imgui_impl_win32.cpp"
+
+del barerg.pdb >nul 2>&1 & cl.exe /nologo /MP %BARERG_DEV_FLAGS% /Iimgui /Iimgui\backends barerg.cpp %IMGUI_SRC_FILE_LIST% /Febarerg.exe /link
 
 
 del *.obj *.res >nul

@@ -128,6 +128,7 @@ enum Token_Kind
 
 struct Token
 {
+    int index;
     int ch;
     Token_Kind previous_kind;
     Token_Kind kind;
@@ -174,6 +175,7 @@ static inline Token_Kind get_token_kind(int ch)
 Token get_token_at_index(ImGuiTextBuffer *ripgrep_output, int index)
 {
     Token token = {0};
+    token.index = index;
 
     if (index < ripgrep_output->size())
     {
@@ -189,16 +191,17 @@ Token get_token_at_index(ImGuiTextBuffer *ripgrep_output, int index)
 struct ParsedLine
 {
     const char *first;
+    const char *first_non_drive_letter_colon;
     const char *one_past_last;
 };
 
-int parse_rg_stdout(ImGuiTextBuffer *ripgrep_output, ImVector<ParsedLine> *lines)
+static int parse_rg_stdout(ImGuiTextBuffer *ripgrep_output, ImVector<ParsedLine> *lines)
 {
     int line_start_index = 0;
     int line_end_index = 0;
+    Token first_non_drive_letter_colon_token = {0};
 
     int lines_count_before = lines->size();
-
     for (int char_index = 0; char_index < ripgrep_output->size(); ++char_index)
     {
         Token token = get_token_at_index(ripgrep_output, char_index);
@@ -209,10 +212,20 @@ int parse_rg_stdout(ImGuiTextBuffer *ripgrep_output, ImVector<ParsedLine> *lines
             ParsedLine new_line = {0};
             new_line.first = ripgrep_output->begin() + line_start_index;
             new_line.one_past_last = ripgrep_output->begin() + line_end_index;
+            new_line.first_non_drive_letter_colon = ripgrep_output->begin() + first_non_drive_letter_colon_token.index;
 
             lines->push_back(new_line);
 
             line_start_index = char_index + 1;
+            first_non_drive_letter_colon_token = {0};
+        }
+        else if (token.kind == Token_Kind_Colon && first_non_drive_letter_colon_token.kind == Token_Kind_Invalid)
+        {
+            // NOTE(irwin): if this colon is the second character in the new line, we're probably dealing with "C:\\" path colon
+            if (line_start_index != (char_index - 1))
+            {
+                first_non_drive_letter_colon_token = token;
+            }
         }
     }
 
@@ -348,10 +361,13 @@ int main(int, char**)
             {
                 static ImGuiTextBuffer ripgrep_output;
                 static ImVector<ParsedLine> ripgrep_output_lines;
+                static char ripgrep_search_command[1024] = "rg.exe imgui c:\\proj\\cpp";
+                ImGui::InputText("ripgrep_search_command", ripgrep_search_command, IM_ARRAYSIZE(ripgrep_search_command));
 
                 if (ImGui::Button("Run ripgrep"))
                 {
                     ripgrep_output.clear();
+                    ripgrep_output_lines.clear();
                     Command command = {0};
 
                     SECURITY_ATTRIBUTES saAttr;
@@ -375,12 +391,12 @@ int main(int, char**)
 
                     command.process_information = {};
 
-                    const char command_string[] = "rg.exe imgui c:\\proj\\cpp";
+                    // const char command_string[] = "rg.exe imgui c:\\proj\\cpp";
                     // const char command_string[] = "cmd /c echo hello";
                     const char working_dir[] = "c:\\proj\\cpp";
 
                     wchar_t *command_string_wide = 0;
-                    UTF8_ToWidechar(&command_string_wide, command_string);
+                    UTF8_ToWidechar(&command_string_wide, ripgrep_search_command);
 
                     if (command_string_wide)
                     {
@@ -425,12 +441,48 @@ int main(int, char**)
                 }
                 if (!ripgrep_output_lines.empty())
                 {
-                    if (ImGui::BeginChild("ripgrep output"))
+                    // if (ImGui::BeginChild("ripgrep output"))
                     {
-                        for (int line_index = 0; line_index < ripgrep_output_lines.size(); ++line_index)
-                        ImGui::TextUnformatted(ripgrep_output_lines[line_index].first, ripgrep_output_lines[line_index].one_past_last);
+                        static ImGuiTableFlags flags = ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersV | ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable | ImGuiTableFlags_Hideable;
+
+                        // PushStyleCompact();
+                        // ImGui::CheckboxFlags("ImGuiTableFlags_ScrollY", &flags, ImGuiTableFlags_ScrollY);
+                        // PopStyleCompact();
+
+                        // const float TEXT_BASE_WIDTH = ImGui::CalcTextSize("A").x;
+                        // const float TEXT_BASE_HEIGHT = ImGui::GetTextLineHeightWithSpacing();
+                        // IM_UNUSED(TEXT_BASE_WIDTH);
+
+
+                        // When using ScrollX or ScrollY we need to specify a size for our table container!
+                        // Otherwise by default the table will fit all available space, like a BeginChild() call.
+                        ImVec2 outer_size = ImVec2(0.0f, 0.0f);
+                        if (ImGui::BeginTable("ripgrep_table", 2, flags, outer_size))
+                        {
+                            ImGui::TableSetupScrollFreeze(0, 1); // Make top row always visible
+                            ImGui::TableSetupColumn("Path", ImGuiTableColumnFlags_None);
+                            ImGui::TableSetupColumn("Match", ImGuiTableColumnFlags_None);
+                            // ImGui::TableSetupColumn("Three", ImGuiTableColumnFlags_None);
+                            ImGui::TableHeadersRow();
+
+                            // Demonstrate using clipper for large vertical lists
+                            ImGuiListClipper clipper;
+                            clipper.Begin(ripgrep_output_lines.size());
+                            while (clipper.Step())
+                            {
+                                for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++)
+                                {
+                                    ImGui::TableNextRow();
+                                    ImGui::TableSetColumnIndex(0);
+                                    ImGui::TextUnformatted(ripgrep_output_lines[row].first, ripgrep_output_lines[row].first_non_drive_letter_colon);
+                                    ImGui::TableSetColumnIndex(1);
+                                    ImGui::TextUnformatted(ripgrep_output_lines[row].first_non_drive_letter_colon+1, ripgrep_output_lines[row].one_past_last);
+                                }
+                            }
+                            ImGui::EndTable();
+                        }
                     }
-                    ImGui::EndChild();
+                    // ImGui::EndChild();
                 }
                 else
                 {

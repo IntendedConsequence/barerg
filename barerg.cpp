@@ -11,6 +11,7 @@
 #include "imgui_impl_dx11.h"
 #include <d3d11.h>
 #include <tchar.h>
+#include <wchar.h> // wprintf
 
 // Data
 static ID3D11Device*            g_pd3dDevice = nullptr;
@@ -26,6 +27,95 @@ void CleanupDeviceD3D();
 void CreateRenderTarget();
 void CleanupRenderTarget();
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+enum Pipe_State
+{
+    PipeState_Invalid = 0,
+    // PipeState_RetryingToOpen,
+    PipeState_Open,
+
+    PipeState_COUNT
+};
+
+
+struct Command
+{
+    bool started;
+    bool abort_requested;
+    HANDLE stdout_read;
+    HANDLE stdout_write;
+    PROCESS_INFORMATION process_information;
+    Pipe_State pipe_state;
+};
+
+
+void PrintLastError(DWORD error_code)
+{
+    wchar_t *buffer;
+    DWORD format_result = FormatMessageW(
+        FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_ALLOCATE_BUFFER,
+        0,
+        error_code,
+        0,
+        (LPWSTR)&buffer,
+        0,
+        0
+    );
+    if (format_result)
+    {
+        wprintf(buffer);
+        LocalFree(buffer);
+    }
+}
+
+void Win32OutputLastError()
+{
+    PrintLastError(GetLastError());
+}
+
+
+
+// NOTE(irwin): caller must free
+int UTF8_ToWidechar(wchar_t **dest, const char *str, size_t str_size)
+{
+    int buf_char_count_needed = MultiByteToWideChar(
+        CP_UTF8,
+        0,
+        str,
+        (int)str_size,
+        0,
+        0
+    );
+
+    if (buf_char_count_needed)
+    {
+        *dest = (wchar_t *)malloc((buf_char_count_needed + 1) * sizeof(wchar_t));
+        MultiByteToWideChar(
+            CP_UTF8,
+            0,
+            str,
+            (int)str_size,
+            *dest,
+            buf_char_count_needed
+        );
+
+        (*dest)[buf_char_count_needed] = 0;
+    }
+
+    return buf_char_count_needed;
+}
+
+int UTF8_ToWidechar(wchar_t **dest, const char *str)
+{
+    size_t len = 0;
+    if (str)
+    {
+        len = strlen(str);
+    }
+    return UTF8_ToWidechar(dest, str, len);
+}
+
+
 
 // Main code
 int main(int, char**)
@@ -164,6 +254,109 @@ int main(int, char**)
             ImGui::Text("counter = %d", counter);
 
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+
+            {
+                static ImGuiTextBuffer ripgrep_output;
+                if (ImGui::Button("Run ripgrep"))
+                {
+                    ripgrep_output.clear();
+                    Command command = {0};
+
+                    SECURITY_ATTRIBUTES saAttr;
+                    saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
+                    saAttr.bInheritHandle = TRUE;
+                    saAttr.lpSecurityDescriptor = NULL;
+
+                    if (!CreatePipe(&command.stdout_read, &command.stdout_write, &saAttr, 0))
+                    {
+                        Win32OutputLastError();
+                    }
+
+                    if (!SetHandleInformation(command.stdout_read, HANDLE_FLAG_INHERIT, 0))
+                    {
+                        Win32OutputLastError();
+                    }
+
+                    STARTUPINFOW si = { sizeof(si) };
+                    si.hStdOutput = command.stdout_write;
+                    si.dwFlags |= STARTF_USESTDHANDLES;
+
+                    command.process_information = {};
+
+                    const char command_string[] = "rg.exe imgui c:\\proj\\cpp";
+                    // const char command_string[] = "cmd /c echo hello";
+                    const char working_dir[] = "c:\\proj\\cpp";
+
+                    wchar_t *command_string_wide = 0;
+                    UTF8_ToWidechar(&command_string_wide, command_string);
+
+                    if (command_string_wide)
+                    {
+                        wchar_t *working_dir_wide = 0;
+                        UTF8_ToWidechar(&working_dir_wide, working_dir);
+                        if (CreateProcessW(0, command_string_wide, 0, 0, true, CREATE_NO_WINDOW, 0, 0, &si, &command.process_information) != 0)
+                        {
+                            command.started = true;
+                            CloseHandle(command.stdout_write);
+                        }
+                        else
+                        {
+                            // TODO(irwin): we need to remove broken command if we don't want it to be retried ad infinitum
+                            // TODO(irwin): run CompleteExecutingCommand ?
+                            CloseHandle(command.stdout_read);
+                            CloseHandle(command.stdout_write);
+                        }
+                        if (working_dir_wide)
+                        {
+                            free(working_dir_wide);
+                        }
+                        free(command_string_wide);
+                    }
+
+#if 0
+                    for(;;)
+                    {
+                        DWORD read;
+                        const int BUFSIZE = 4096;
+                        char chBuf[BUFSIZE] = {};
+
+                        BOOL success = FALSE;
+
+                        success = ReadFile(command.stdout_read, chBuf, BUFSIZE, &read, NULL);
+                        if (success && read)
+                        {
+                            ripgrep_output.append(&chBuf[0], &chBuf[0] + read);
+                        }
+                        else
+                        {
+                            break;
+                    }
+#else
+                    {
+                        DWORD read;
+                        const int BUFSIZE = 4096;
+                        char chBuf[BUFSIZE] = {};
+
+                        while (ReadFile(command.stdout_read, chBuf, BUFSIZE, &read, NULL))
+                        {
+                            ripgrep_output.append(&chBuf[0], &chBuf[0] + read);
+                        }
+                    }
+#endif
+
+                    command.started = false;
+                    CloseHandle(command.stdout_read);
+                }
+                if (!ripgrep_output.empty())
+                {
+                    ImGui::TextUnformatted(ripgrep_output.begin(), ripgrep_output.end());
+                }
+                else
+                {
+                    ImGui::Text("Ripgrep output empty");
+                }
+            }
+
             ImGui::End();
         }
 

@@ -115,6 +115,110 @@ int UTF8_ToWidechar(wchar_t **dest, const char *str)
     return UTF8_ToWidechar(dest, str, len);
 }
 
+enum Token_Kind
+{
+    Token_Kind_Invalid = 0,
+    Token_Kind_Colon,
+    Token_Kind_CR,
+    Token_Kind_LF,
+    Token_Kind_Rest,
+
+    Token_Kind_COUNT
+};
+
+struct Token
+{
+    int ch;
+    Token_Kind previous_kind;
+    Token_Kind kind;
+    Token_Kind next_kind;
+};
+
+static inline Token_Kind get_token_kind(int ch)
+{
+    // TODO(irwin): we probably want to skip non-printable characters, but I don't know
+    // if this check will fail correct utf8 characters or bytes, since atm the incoming
+    // text encoding is uncertain, so assume it's ascii for now
+    // if (ch > 0 && ch < 255)
+    if (!!true)
+    {
+        switch (ch)
+        {
+            case ':':
+            {
+                return Token_Kind_Colon;
+            } break;
+
+            case '\n':
+            {
+                return Token_Kind_LF;
+            } break;
+
+            case '\r':
+            {
+                return Token_Kind_CR;
+            } break;
+
+            default:
+            {
+                return Token_Kind_Rest;
+            } break;
+        }
+    }
+    else
+    {
+        return Token_Kind_Invalid;
+    }
+}
+
+Token get_token_at_index(ImGuiTextBuffer *ripgrep_output, int index)
+{
+    Token token = {0};
+
+    if (index < ripgrep_output->size())
+    {
+        token.ch = (*ripgrep_output)[index];
+        token.kind = get_token_kind(token.ch);
+        token.previous_kind = index > 0 ? get_token_kind((*ripgrep_output)[index-1]) : Token_Kind_Invalid;
+        token.next_kind = (index + 1) < ripgrep_output->size() ? get_token_kind((*ripgrep_output)[index+1]) : Token_Kind_Invalid;
+    }
+
+    return token;
+}
+
+struct ParsedLine
+{
+    const char *first;
+    const char *one_past_last;
+};
+
+int parse_rg_stdout(ImGuiTextBuffer *ripgrep_output, ImVector<ParsedLine> *lines)
+{
+    int line_start_index = 0;
+    int line_end_index = 0;
+
+    int lines_count_before = lines->size();
+
+    for (int char_index = 0; char_index < ripgrep_output->size(); ++char_index)
+    {
+        Token token = get_token_at_index(ripgrep_output, char_index);
+        if (token.kind == Token_Kind_LF)
+        {
+            line_end_index = char_index - (token.previous_kind == Token_Kind_CR);
+
+            ParsedLine new_line = {0};
+            new_line.first = ripgrep_output->begin() + line_start_index;
+            new_line.one_past_last = ripgrep_output->begin() + line_end_index;
+
+            lines->push_back(new_line);
+
+            line_start_index = char_index + 1;
+        }
+    }
+
+    return lines->size() - lines_count_before;
+}
+
 
 
 // Main code
@@ -188,7 +292,6 @@ int main(int, char**)
 
     // Our state
     bool show_demo_window = true;
-    bool show_another_window = false;
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
     // Main loop
@@ -236,27 +339,16 @@ int main(int, char**)
 
         // 2. Show a simple window that we create ourselves. We use a Begin/End pair to create a named window.
         {
-            static float f = 0.0f;
-            static int counter = 0;
-
             ImGui::Begin("Hello, world!");                          // Create a window called "Hello, world!" and append into it.
 
-            ImGui::Text("This is some useful text.");               // Display some text (you can use a format strings too)
             ImGui::Checkbox("Demo Window", &show_demo_window);      // Edit bools storing our window open/close state
-            ImGui::Checkbox("Another Window", &show_another_window);
-
-            ImGui::SliderFloat("float", &f, 0.0f, 1.0f);            // Edit 1 float using a slider from 0.0f to 1.0f
-            ImGui::ColorEdit3("clear color", (float*)&clear_color); // Edit 3 floats representing a color
-
-            if (ImGui::Button("Button"))                            // Buttons return true when clicked (most widgets return true when edited/activated)
-                counter++;
-            ImGui::SameLine();
-            ImGui::Text("counter = %d", counter);
 
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
 
             {
                 static ImGuiTextBuffer ripgrep_output;
+                static ImVector<ParsedLine> ripgrep_output_lines;
+
                 if (ImGui::Button("Run ripgrep"))
                 {
                     ripgrep_output.clear();
@@ -313,25 +405,6 @@ int main(int, char**)
                         free(command_string_wide);
                     }
 
-#if 0
-                    for(;;)
-                    {
-                        DWORD read;
-                        const int BUFSIZE = 4096;
-                        char chBuf[BUFSIZE] = {};
-
-                        BOOL success = FALSE;
-
-                        success = ReadFile(command.stdout_read, chBuf, BUFSIZE, &read, NULL);
-                        if (success && read)
-                        {
-                            ripgrep_output.append(&chBuf[0], &chBuf[0] + read);
-                        }
-                        else
-                        {
-                            break;
-                    }
-#else
                     {
                         DWORD read;
                         const int BUFSIZE = 4096;
@@ -342,14 +415,22 @@ int main(int, char**)
                             ripgrep_output.append(&chBuf[0], &chBuf[0] + read);
                         }
                     }
-#endif
 
                     command.started = false;
                     CloseHandle(command.stdout_read);
+                    {
+                        int lines_parsed = parse_rg_stdout(&ripgrep_output, &ripgrep_output_lines);
+                        IM_UNUSED(lines_parsed);
+                    }
                 }
-                if (!ripgrep_output.empty())
+                if (!ripgrep_output_lines.empty())
                 {
-                    ImGui::TextUnformatted(ripgrep_output.begin(), ripgrep_output.end());
+                    if (ImGui::BeginChild("ripgrep output"))
+                    {
+                        for (int line_index = 0; line_index < ripgrep_output_lines.size(); ++line_index)
+                        ImGui::TextUnformatted(ripgrep_output_lines[line_index].first, ripgrep_output_lines[line_index].one_past_last);
+                    }
+                    ImGui::EndChild();
                 }
                 else
                 {
@@ -357,16 +438,6 @@ int main(int, char**)
                 }
             }
 
-            ImGui::End();
-        }
-
-        // 3. Show another simple window.
-        if (show_another_window)
-        {
-            ImGui::Begin("Another Window", &show_another_window);   // Pass a pointer to our bool variable (the window will have a closing button that will clear the bool when clicked)
-            ImGui::Text("Hello from another window!");
-            if (ImGui::Button("Close Me"))
-                show_another_window = false;
             ImGui::End();
         }
 

@@ -190,29 +190,40 @@ Token get_token_at_index(ImGuiTextBuffer *ripgrep_output, int index)
 
 struct ParsedLine
 {
-    const char *first;
-    const char *first_non_drive_letter_colon;
-    const char *one_past_last;
+    int first;
+    int first_non_drive_letter_colon;
+    int one_past_last;
 };
 
 static int parse_rg_stdout(ImGuiTextBuffer *ripgrep_output, ImVector<ParsedLine> *lines)
 {
-    int line_start_index = 0;
-    int line_end_index = 0;
     Token first_non_drive_letter_colon_token = {0};
 
+    int first_index = 0;
     int lines_count_before = lines->size();
-    for (int char_index = 0; char_index < ripgrep_output->size(); ++char_index)
+    if (lines_count_before > 0)
+    {
+        // NOTE(irwin): one_past_last is at LF
+        first_index = lines->back().one_past_last;
+        first_index += get_token_at_index(ripgrep_output, first_index).kind == Token_Kind_CR;
+        first_index += get_token_at_index(ripgrep_output, first_index).kind == Token_Kind_LF;
+    }
+    int line_start_index = first_index;
+    int line_end_index = line_start_index;
+
+    for (int char_index = first_index; char_index < ripgrep_output->size(); ++char_index)
     {
         Token token = get_token_at_index(ripgrep_output, char_index);
         if (token.kind == Token_Kind_LF)
         {
             line_end_index = char_index - (token.previous_kind == Token_Kind_CR);
+            IM_ASSERT(line_end_index > line_start_index);
+            IM_ASSERT(first_non_drive_letter_colon_token.kind != Token_Kind_Invalid);
 
             ParsedLine new_line = {0};
-            new_line.first = ripgrep_output->begin() + line_start_index;
-            new_line.one_past_last = ripgrep_output->begin() + line_end_index;
-            new_line.first_non_drive_letter_colon = ripgrep_output->begin() + first_non_drive_letter_colon_token.index;
+            new_line.first = line_start_index;
+            new_line.one_past_last = line_end_index;
+            new_line.first_non_drive_letter_colon = first_non_drive_letter_colon_token.index;
 
             lines->push_back(new_line);
 
@@ -307,6 +318,10 @@ int main(int, char**)
     bool show_demo_window = true;
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
+    Command command = {0};
+    static ImGuiTextBuffer ripgrep_output;
+    static ImVector<ParsedLine> ripgrep_output_lines;
+
     // Main loop
     bool done = false;
     while (!done)
@@ -359,16 +374,13 @@ int main(int, char**)
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
 
             {
-                static ImGuiTextBuffer ripgrep_output;
-                static ImVector<ParsedLine> ripgrep_output_lines;
                 static char ripgrep_search_command[1024] = "rg.exe imgui c:\\proj\\cpp";
                 ImGui::InputText("ripgrep_search_command", ripgrep_search_command, IM_ARRAYSIZE(ripgrep_search_command));
 
-                if (ImGui::Button("Run ripgrep"))
+                if (ImGui::Button("Run ripgrep") && !command.started)
                 {
                     ripgrep_output.clear();
                     ripgrep_output_lines.clear();
-                    Command command = {0};
 
                     SECURITY_ATTRIBUTES saAttr;
                     saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
@@ -379,65 +391,55 @@ int main(int, char**)
                     {
                         Win32OutputLastError();
                     }
-
-                    if (!SetHandleInformation(command.stdout_read, HANDLE_FLAG_INHERIT, 0))
+                    else
                     {
-                        Win32OutputLastError();
-                    }
-
-                    STARTUPINFOW si = { sizeof(si) };
-                    si.hStdOutput = command.stdout_write;
-                    si.dwFlags |= STARTF_USESTDHANDLES;
-
-                    command.process_information = {};
-
-                    // const char command_string[] = "rg.exe imgui c:\\proj\\cpp";
-                    // const char command_string[] = "cmd /c echo hello";
-                    const char working_dir[] = "c:\\proj\\cpp";
-
-                    wchar_t *command_string_wide = 0;
-                    UTF8_ToWidechar(&command_string_wide, ripgrep_search_command);
-
-                    if (command_string_wide)
-                    {
-                        wchar_t *working_dir_wide = 0;
-                        UTF8_ToWidechar(&working_dir_wide, working_dir);
-                        if (CreateProcessW(0, command_string_wide, 0, 0, true, CREATE_NO_WINDOW, 0, 0, &si, &command.process_information) != 0)
+                        if (!SetHandleInformation(command.stdout_read, HANDLE_FLAG_INHERIT, 0))
                         {
-                            command.started = true;
-                            CloseHandle(command.stdout_write);
+                            Win32OutputLastError();
                         }
                         else
                         {
-                            // TODO(irwin): we need to remove broken command if we don't want it to be retried ad infinitum
-                            // TODO(irwin): run CompleteExecutingCommand ?
-                            CloseHandle(command.stdout_read);
-                            CloseHandle(command.stdout_write);
+                            STARTUPINFOW si = { sizeof(si) };
+                            si.hStdOutput = command.stdout_write;
+                            si.dwFlags |= STARTF_USESTDHANDLES;
+
+                            command.process_information = {};
+
+                            // const char command_string[] = "rg.exe imgui c:\\proj\\cpp";
+                            // const char command_string[] = "cmd /c echo hello";
+                            const char working_dir[] = "c:\\proj\\cpp";
+
+                            wchar_t *command_string_wide = 0;
+                            UTF8_ToWidechar(&command_string_wide, ripgrep_search_command);
+
+                            if (command_string_wide)
+                            {
+                                wchar_t *working_dir_wide = 0;
+                                UTF8_ToWidechar(&working_dir_wide, working_dir);
+                                if (CreateProcessW(0, command_string_wide, 0, 0, true, CREATE_NO_WINDOW, 0, 0, &si, &command.process_information) != 0)
+                                {
+                                    command.started = true;
+                                    CloseHandle(command.stdout_write);
+                                }
+                                else
+                                {
+                                    // TODO(irwin): we need to remove broken command if we don't want it to be retried ad infinitum
+                                    // TODO(irwin): run CompleteExecutingCommand ?
+                                    CloseHandle(command.stdout_read);
+                                    CloseHandle(command.stdout_write);
+                                }
+                                if (working_dir_wide)
+                                {
+                                    free(working_dir_wide);
+                                }
+                                free(command_string_wide);
+                            }
+
                         }
-                        if (working_dir_wide)
-                        {
-                            free(working_dir_wide);
-                        }
-                        free(command_string_wide);
+
+
                     }
 
-                    {
-                        DWORD read;
-                        const int BUFSIZE = 4096;
-                        char chBuf[BUFSIZE] = {};
-
-                        while (ReadFile(command.stdout_read, chBuf, BUFSIZE, &read, NULL))
-                        {
-                            ripgrep_output.append(&chBuf[0], &chBuf[0] + read);
-                        }
-                    }
-
-                    command.started = false;
-                    CloseHandle(command.stdout_read);
-                    {
-                        int lines_parsed = parse_rg_stdout(&ripgrep_output, &ripgrep_output_lines);
-                        IM_UNUSED(lines_parsed);
-                    }
                 }
                 if (!ripgrep_output_lines.empty())
                 {
@@ -472,11 +474,12 @@ int main(int, char**)
                             {
                                 for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++)
                                 {
+                                    ParsedLine line = ripgrep_output_lines[row];
                                     ImGui::TableNextRow();
                                     ImGui::TableSetColumnIndex(0);
-                                    ImGui::TextUnformatted(ripgrep_output_lines[row].first, ripgrep_output_lines[row].first_non_drive_letter_colon);
+                                    ImGui::TextUnformatted(ripgrep_output.begin() + line.first, ripgrep_output.begin() + line.first_non_drive_letter_colon);
                                     ImGui::TableSetColumnIndex(1);
-                                    ImGui::TextUnformatted(ripgrep_output_lines[row].first_non_drive_letter_colon+1, ripgrep_output_lines[row].one_past_last);
+                                    ImGui::TextUnformatted(ripgrep_output.begin() + line.first_non_drive_letter_colon+1, ripgrep_output.begin() + line.one_past_last);
                                 }
                             }
                             ImGui::EndTable();
@@ -506,6 +509,43 @@ int main(int, char**)
             ImGui::UpdatePlatformWindows();
             ImGui::RenderPlatformWindowsDefault();
         }
+
+        if (command.started)
+        {
+            DWORD read;
+            const int BUFSIZE = 4096;
+            char chBuf[BUFSIZE] = {};
+
+#if 0
+            while (ReadFile(command.stdout_read, chBuf, BUFSIZE, &read, NULL))
+            {
+                ripgrep_output.append(&chBuf[0], &chBuf[0] + read);
+            }
+
+            command.started = false;
+            CloseHandle(command.stdout_read);
+            {
+                int lines_parsed = parse_rg_stdout(&ripgrep_output, &ripgrep_output_lines);
+                IM_UNUSED(lines_parsed);
+            }
+#else
+            if (ReadFile(command.stdout_read, chBuf, BUFSIZE, &read, NULL))
+            {
+                ripgrep_output.append(&chBuf[0], &chBuf[0] + read);
+                int lines_parsed = parse_rg_stdout(&ripgrep_output, &ripgrep_output_lines);
+                IM_UNUSED(lines_parsed);
+            }
+            else
+            {
+                command.started = false;
+                CloseHandle(command.stdout_read);
+                {
+                }
+            }
+
+#endif
+        }
+
 
         // Present
         HRESULT hr = g_pSwapChain->Present(1, 0);   // Present with vsync

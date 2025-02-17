@@ -188,13 +188,105 @@ Token get_token_at_index(ImGuiTextBuffer *ripgrep_output, int index)
     return token;
 }
 
-struct ParsedLine
+struct IndexedString
 {
     int first;
-    int first_non_drive_letter_colon;
     int one_past_last;
 };
 
+struct ParsedLine
+{
+    IndexedString filepath;
+    IndexedString line_number;
+    IndexedString match;
+};
+
+static Token eat_all_newlines(ImGuiTextBuffer *ripgrep_output, Token at)
+{
+    while (at.kind != Token_Kind_Invalid &&
+           (at.kind == Token_Kind_CR || at.kind == Token_Kind_LF))
+    {
+        at = get_token_at_index(ripgrep_output, at.index+1);
+    }
+
+    return at;
+}
+
+static Token eat_until_newlines(ImGuiTextBuffer *ripgrep_output, Token at)
+{
+    while (at.kind != Token_Kind_Invalid &&
+           at.kind != Token_Kind_CR &&
+           at.kind != Token_Kind_LF)
+    {
+        at = get_token_at_index(ripgrep_output, at.index+1);
+    }
+
+    return at;
+}
+
+static Token eat_until_token(ImGuiTextBuffer *ripgrep_output, int start_index, Token_Kind kind)
+{
+    IM_ASSERT(kind >= Token_Kind_Invalid && kind < Token_Kind_COUNT);
+
+    Token start = get_token_at_index(ripgrep_output, start_index);
+    while (start.kind != Token_Kind_Invalid && start.kind != kind)
+    {
+        start = get_token_at_index(ripgrep_output, start.index+1);
+    }
+
+    return start;
+}
+
+static IndexedString parse_filepath(ImGuiTextBuffer *ripgrep_output, Token at)
+{
+    Token start = eat_all_newlines(ripgrep_output, at);
+    Token last = eat_until_token(ripgrep_output, start.index, Token_Kind_Colon);
+    if (last.kind == Token_Kind_Colon && last.index - start.index == 1)
+    {
+        last = eat_until_token(ripgrep_output, last.index+1, Token_Kind_Colon);
+    }
+
+    // IM_ASSERT(start.index < last.index);
+
+    IndexedString filepath = {0};
+    filepath.first = start.index;
+    filepath.one_past_last = last.index;
+
+    return filepath;
+}
+
+static IndexedString parse_line_num(ImGuiTextBuffer *ripgrep_output, Token at)
+{
+    Token start = eat_all_newlines(ripgrep_output, at);
+    start = eat_until_token(ripgrep_output, start.index, Token_Kind_Colon);
+    Token last = {0};
+    if (start.kind == Token_Kind_Colon)
+    {
+        last = eat_until_token(ripgrep_output, start.index+1, Token_Kind_Colon);
+    }
+
+    IndexedString line_number = {0};
+    line_number.first = start.index+1;
+    line_number.one_past_last = last.index;
+
+    return line_number;
+}
+
+static IndexedString parse_match(ImGuiTextBuffer *ripgrep_output, Token at)
+{
+    Token start = get_token_at_index(ripgrep_output, at.index+1);
+    Token last = eat_until_newlines(ripgrep_output, start);
+
+    // IM_ASSERT(start.index < last.index);
+
+    IndexedString match = {0};
+    match.first = start.index;
+    match.one_past_last = last.index;
+
+    return match;
+}
+
+#if 0
 static int parse_rg_stdout(ImGuiTextBuffer *ripgrep_output, ImVector<ParsedLine> *lines)
 {
     Token first_non_drive_letter_colon_token = {0};
@@ -242,7 +334,70 @@ static int parse_rg_stdout(ImGuiTextBuffer *ripgrep_output, ImVector<ParsedLine>
 
     return lines->size() - lines_count_before;
 }
+#else
+static int parse_rg_stdout(ImGuiTextBuffer *ripgrep_output, ImVector<ParsedLine> *lines)
+{
+    int first_index = 0;
+    int lines_count_before = lines->size();
+    if (lines_count_before > 0)
+    {
+        // NOTE(irwin): one_past_last is at LF
+        first_index = lines->back().match.one_past_last;
+    }
 
+    for (int char_index = first_index; char_index < ripgrep_output->size();)
+    {
+        Token token = get_token_at_index(ripgrep_output, char_index);
+
+        IndexedString filepath = parse_filepath(ripgrep_output, token);
+        token = get_token_at_index(ripgrep_output, filepath.one_past_last);
+        if (token.kind == Token_Kind_Colon)
+        {
+            IndexedString line_number = parse_line_num(ripgrep_output, token);
+            token = get_token_at_index(ripgrep_output, line_number.one_past_last);
+            if (token.kind == Token_Kind_Colon)
+            {
+                IndexedString match = parse_match(ripgrep_output, token);
+                token = get_token_at_index(ripgrep_output, match.one_past_last);
+
+                if (token.kind == Token_Kind_CR || token.kind == Token_Kind_LF)
+                {
+                    if (filepath.first < filepath.one_past_last &&
+                        line_number.first < line_number.one_past_last &&
+                        match.first < match.one_past_last)
+                    {
+                        ParsedLine new_line = {0};
+                        new_line.filepath = filepath;
+                        new_line.line_number = line_number;
+                        new_line.match = match;
+                        lines->push_back(new_line);
+
+                        char_index = new_line.match.one_past_last;
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
+                else
+                {
+                    break;
+                }
+            }
+            else
+            {
+                break;
+            }
+        }
+        else
+        {
+            break;
+        }
+    }
+
+    return lines->size() - lines_count_before;
+}
+#endif
 
 
 // Main code
@@ -283,8 +438,12 @@ int main(int, char**)
     //io.ConfigFlags |= ImGuiConfigFlags_DpiEnableScaleViewports; // FIXME-DPI: Experimental.
 
     // Setup Dear ImGui style
-    ImGui::StyleColorsDark();
-    //ImGui::StyleColorsLight();
+    // ImGui::StyleColorsDark();
+    ImGui::StyleColorsLight();
+    ImGui::GetStyle().FrameBorderSize = 1.0f;
+    io.Fonts->AddFontFromFileTTF("c:/Windows/Fonts/segoeui.ttf", 18.0f);
+    // io.Fonts->AddFontFromFileTTF("c:/Windows/Fonts/segoeui.ttf", 22.0f);
+
 
     // When viewports are enabled we tweak WindowRounding/WindowBg so platform windows can look identical to regular ones.
     ImGuiStyle& style = ImGui::GetStyle();
@@ -374,10 +533,16 @@ int main(int, char**)
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
 
             {
-                static char ripgrep_search_command[1024] = "rg.exe imgui c:\\proj\\cpp";
+                static char ripgrep_search_command[1024] = "rg.exe --line-number imgui c:\\proj\\cpp";
                 ImGui::InputText("ripgrep_search_command", ripgrep_search_command, IM_ARRAYSIZE(ripgrep_search_command));
+                bool run_pressed = ImGui::IsItemDeactivatedAfterEdit();
 
-                if (ImGui::Button("Run ripgrep") && !command.started)
+                run_pressed |= ImGui::Button("Run ripgrep");
+
+                ImGui::SameLine();
+                ImGui::Text("%d matches", ripgrep_output_lines.size());
+
+                if (run_pressed && !command.started)
                 {
                     ripgrep_output.clear();
                     ripgrep_output_lines.clear();
@@ -459,10 +624,11 @@ int main(int, char**)
                         // When using ScrollX or ScrollY we need to specify a size for our table container!
                         // Otherwise by default the table will fit all available space, like a BeginChild() call.
                         ImVec2 outer_size = ImVec2(0.0f, 0.0f);
-                        if (ImGui::BeginTable("ripgrep_table", 2, flags, outer_size))
+                        if (ImGui::BeginTable("ripgrep_table", 3, flags, outer_size))
                         {
                             ImGui::TableSetupScrollFreeze(0, 1); // Make top row always visible
                             ImGui::TableSetupColumn("Path", ImGuiTableColumnFlags_None);
+                            ImGui::TableSetupColumn("Line", ImGuiTableColumnFlags_None);
                             ImGui::TableSetupColumn("Match", ImGuiTableColumnFlags_None);
                             // ImGui::TableSetupColumn("Three", ImGuiTableColumnFlags_None);
                             ImGui::TableHeadersRow();
@@ -476,10 +642,41 @@ int main(int, char**)
                                 {
                                     ParsedLine line = ripgrep_output_lines[row];
                                     ImGui::TableNextRow();
+
                                     ImGui::TableSetColumnIndex(0);
-                                    ImGui::TextUnformatted(ripgrep_output.begin() + line.first, ripgrep_output.begin() + line.first_non_drive_letter_colon);
+                                    ImGui::TextUnformatted(ripgrep_output.begin() + line.filepath.first, ripgrep_output.begin() + line.filepath.one_past_last);
+
                                     ImGui::TableSetColumnIndex(1);
-                                    ImGui::TextUnformatted(ripgrep_output.begin() + line.first_non_drive_letter_colon+1, ripgrep_output.begin() + line.one_past_last);
+                                    const char *line_first = ripgrep_output.begin() + line.line_number.first;
+                                    const char *line_one_past_last = ripgrep_output.begin() + line.line_number.one_past_last;
+                                    // ImGui::SetNextItemWidth(-ImGui::CalcTextSize(line_first, line_one_past_last).x);
+                                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(line_first, line_one_past_last).x) - 3.0f);
+
+                                    ImGuiTextBuffer buf;
+                                    buf.append(line_first, line_one_past_last);
+                                    // ImGui::SetNextItemWidth(-ImGui::GetContentRegionAvail().x);
+                                    // ImGui::SetNextItemWidth(-FLT_MIN);
+                                    // ImGui::SetNextItemWidth(-100.0f);
+                                    ImGui::PushID(row);
+                                    if (ImGui::Button(buf.c_str()))
+                                    {
+                                        buf.clear();
+                                        buf.append("C:\\Program Files (x86)\\Notepad++\\notepad++.exe");
+
+                                        ImGuiTextBuffer buf2;
+                                        buf2.appendf("\"%.*s\"", line.filepath.one_past_last - line.filepath.first, ripgrep_output.begin() + line.filepath.first);
+                                        buf2.appendf(" -n%.*s", line.line_number.one_past_last - line.line_number.first, ripgrep_output.begin() + line.line_number.first);
+
+                                        ShellExecuteA(NULL, "open", buf.c_str(), buf2.c_str(), NULL, 0);
+                                    }
+                                    ImGui::PopID();
+
+                                    // ImGui::TextUnformatted(line_first, line_one_past_last);
+                                    // ImGui::Text("%.*s", line_one_past_last - line_first, line_first);
+
+
+                                    ImGui::TableSetColumnIndex(2);
+                                    ImGui::TextUnformatted(ripgrep_output.begin() + line.match.first, ripgrep_output.begin() + line.match.one_past_last);
                                 }
                             }
                             ImGui::EndTable();

@@ -646,7 +646,7 @@ int main(int, char**)
                                 {
                                     ParsedLine line = ripgrep_output_lines[row];
                                     ImGui::TableNextRow();
-
+#if 0
                                     ImGui::TableSetColumnIndex(0);
                                     ImGui::TextUnformatted(ripgrep_output.begin() + line.filepath.first, ripgrep_output.begin() + line.filepath.one_past_last);
 
@@ -674,6 +674,45 @@ int main(int, char**)
                                         ShellExecuteA(NULL, "open", buf.c_str(), buf2.c_str(), NULL, 0);
                                     }
                                     ImGui::PopID();
+#else
+
+                                    bool pressed = false;
+                                    ImGui::TableSetColumnIndex(0);
+                                    {
+                                        ImGuiTextBuffer filepath;
+                                        filepath.append(ripgrep_output.begin() + line.filepath.first, ripgrep_output.begin() + line.filepath.one_past_last);
+                                        ImGui::PushID(row);
+                                        pressed = ImGui::Selectable(filepath.c_str(), false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowItemOverlap);
+                                        ImGui::PopID();
+                                    }
+
+                                    ImGui::TableSetColumnIndex(1);
+                                    {
+                                        const char *line_first = ripgrep_output.begin() + line.line_number.first;
+                                        const char *line_one_past_last = ripgrep_output.begin() + line.line_number.one_past_last;
+                                        // ImGui::SetNextItemWidth(-ImGui::CalcTextSize(line_first, line_one_past_last).x);
+                                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(line_first, line_one_past_last).x) - 3.0f);
+
+                                        ImGuiTextBuffer buf;
+                                        buf.append(line_first, line_one_past_last);
+                                        // ImGui::SetNextItemWidth(-ImGui::GetContentRegionAvail().x);
+                                        // ImGui::SetNextItemWidth(-FLT_MIN);
+                                        // ImGui::SetNextItemWidth(-100.0f);
+                                        ImGui::Text(buf.c_str());
+
+                                        if (pressed)
+                                        {
+                                            buf.clear();
+                                            buf.append("C:\\Program Files (x86)\\Notepad++\\notepad++.exe");
+
+                                            ImGuiTextBuffer buf2;
+                                            buf2.appendf("\"%.*s\"", line.filepath.one_past_last - line.filepath.first, ripgrep_output.begin() + line.filepath.first);
+                                            buf2.appendf(" -n%.*s", line.line_number.one_past_last - line.line_number.first, ripgrep_output.begin() + line.line_number.first);
+
+                                            ShellExecuteA(NULL, "open", buf.c_str(), buf2.c_str(), NULL, 0);
+                                        }
+                                    }
+#endif
 
                                     // ImGui::TextUnformatted(line_first, line_one_past_last);
                                     // ImGui::Text("%.*s", line_one_past_last - line_first, line_first);

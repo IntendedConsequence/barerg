@@ -287,54 +287,8 @@ static IndexedString parse_match(ImGuiTextBuffer *ripgrep_output, Token at)
 }
 
 #if 0
-static int parse_rg_stdout(ImGuiTextBuffer *ripgrep_output, ImVector<ParsedLine> *lines)
-{
-    Token first_non_drive_letter_colon_token = {0};
-
-    int first_index = 0;
-    int lines_count_before = lines->size();
-    if (lines_count_before > 0)
-    {
-        // NOTE(irwin): one_past_last is at LF
-        first_index = lines->back().one_past_last;
-        first_index += get_token_at_index(ripgrep_output, first_index).kind == Token_Kind_CR;
-        first_index += get_token_at_index(ripgrep_output, first_index).kind == Token_Kind_LF;
-    }
-    int line_start_index = first_index;
-    int line_end_index = line_start_index;
-
-    for (int char_index = first_index; char_index < ripgrep_output->size(); ++char_index)
-    {
-        Token token = get_token_at_index(ripgrep_output, char_index);
-        if (token.kind == Token_Kind_LF)
-        {
-            line_end_index = char_index - (token.previous_kind == Token_Kind_CR);
-            IM_ASSERT(line_end_index > line_start_index);
-            IM_ASSERT(first_non_drive_letter_colon_token.kind != Token_Kind_Invalid);
-
-            ParsedLine new_line = {0};
-            new_line.first = line_start_index;
-            new_line.one_past_last = line_end_index;
-            new_line.first_non_drive_letter_colon = first_non_drive_letter_colon_token.index;
-
-            lines->push_back(new_line);
-
-            line_start_index = char_index + 1;
-            first_non_drive_letter_colon_token = {0};
-        }
-        else if (token.kind == Token_Kind_Colon && first_non_drive_letter_colon_token.kind == Token_Kind_Invalid)
-        {
-            // NOTE(irwin): if this colon is the second character in the new line, we're probably dealing with "C:\\" path colon
-            if (line_start_index != (char_index - 1))
-            {
-                first_non_drive_letter_colon_token = token;
-            }
-        }
-    }
-
-    return lines->size() - lines_count_before;
-}
 #else
+
 static int parse_rg_stdout(ImGuiTextBuffer *ripgrep_output, ImVector<ParsedLine> *lines)
 {
     int first_index = 0;
@@ -647,33 +601,6 @@ int main(int, char**)
                                     ParsedLine line = ripgrep_output_lines[row];
                                     ImGui::TableNextRow();
 #if 0
-                                    ImGui::TableSetColumnIndex(0);
-                                    ImGui::TextUnformatted(ripgrep_output.begin() + line.filepath.first, ripgrep_output.begin() + line.filepath.one_past_last);
-
-                                    ImGui::TableSetColumnIndex(1);
-                                    const char *line_first = ripgrep_output.begin() + line.line_number.first;
-                                    const char *line_one_past_last = ripgrep_output.begin() + line.line_number.one_past_last;
-                                    // ImGui::SetNextItemWidth(-ImGui::CalcTextSize(line_first, line_one_past_last).x);
-                                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(line_first, line_one_past_last).x) - 3.0f);
-
-                                    ImGuiTextBuffer buf;
-                                    buf.append(line_first, line_one_past_last);
-                                    // ImGui::SetNextItemWidth(-ImGui::GetContentRegionAvail().x);
-                                    // ImGui::SetNextItemWidth(-FLT_MIN);
-                                    // ImGui::SetNextItemWidth(-100.0f);
-                                    ImGui::PushID(row);
-                                    if (ImGui::Button(buf.c_str()))
-                                    {
-                                        buf.clear();
-                                        buf.append("C:\\Program Files (x86)\\Notepad++\\notepad++.exe");
-
-                                        ImGuiTextBuffer buf2;
-                                        buf2.appendf("\"%.*s\"", line.filepath.one_past_last - line.filepath.first, ripgrep_output.begin() + line.filepath.first);
-                                        buf2.appendf(" -n%.*s", line.line_number.one_past_last - line.line_number.first, ripgrep_output.begin() + line.line_number.first);
-
-                                        ShellExecuteA(NULL, "open", buf.c_str(), buf2.c_str(), NULL, 0);
-                                    }
-                                    ImGui::PopID();
 #else
 
                                     bool pressed = false;
@@ -779,17 +706,6 @@ int main(int, char**)
             char chBuf[BUFSIZE] = {};
 
 #if 0
-            while (ReadFile(command.stdout_read, chBuf, BUFSIZE, &read, NULL))
-            {
-                ripgrep_output.append(&chBuf[0], &chBuf[0] + read);
-            }
-
-            command.started = false;
-            CloseHandle(command.stdout_read);
-            {
-                int lines_parsed = parse_rg_stdout(&ripgrep_output, &ripgrep_output_lines);
-                IM_UNUSED(lines_parsed);
-            }
 #else
             if (ReadFile(command.stdout_read, chBuf, BUFSIZE, &read, NULL))
             {

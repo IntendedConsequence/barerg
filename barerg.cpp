@@ -7,6 +7,7 @@
 // - Introduction, links and more at the top of imgui.cpp
 
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
 #include <d3d11.h>
@@ -28,6 +29,7 @@ void CreateRenderTarget();
 void CleanupRenderTarget();
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
+// TODO(irwin): remove @cleanup
 enum Pipe_State
 {
     PipeState_Invalid = 0,
@@ -115,6 +117,8 @@ int UTF8_ToWidechar(wchar_t **dest, const char *str)
     return UTF8_ToWidechar(dest, str, len);
 }
 
+// TODO(irwin): this parser sucks, rewrite or switch to parsing ripgrep's json output, we'll
+//              probably have to do that anyway if we want to highlight matches inline
 enum Token_Kind
 {
     Token_Kind_Invalid = 0,
@@ -359,9 +363,9 @@ int main(int, char**)
 {
     // Create application window
     //ImGui_ImplWin32_EnableDpiAwareness();
-    WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, L"ImGui Example", nullptr };
+    WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, L"barerg", nullptr };
     ::RegisterClassExW(&wc);
-    HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"Dear ImGui DirectX11 Example", WS_OVERLAPPEDWINDOW, 100, 100, 1280, 800, nullptr, nullptr, wc.hInstance, nullptr);
+    HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"barerg - barebones ripgrep ui", WS_OVERLAPPEDWINDOW, 100, 100, 1280, 800, nullptr, nullptr, wc.hInstance, nullptr);
 
     // Initialize Direct3D
     if (!CreateDeviceD3D(hwnd))
@@ -428,12 +432,13 @@ int main(int, char**)
     //IM_ASSERT(font != nullptr);
 
     // Our state
-    bool show_demo_window = true;
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
     Command command = {0};
     static ImGuiTextBuffer ripgrep_output;
     static ImVector<ParsedLine> ripgrep_output_lines;
+
+    float smoothed_framerate = io.Framerate;
 
     // Main loop
     bool done = false;
@@ -472,27 +477,77 @@ int main(int, char**)
         // Start the Dear ImGui frame
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
+
+        static bool was_active = false;
+
+        static int activeFrames = 3;
+        if( command.started || was_active )
+        {
+            activeFrames = 3;
+        }
+        else
+        {
+            auto ctx = ImGui::GetCurrentContext();
+            if( ctx->NavWindowingTarget || ( ctx->DimBgRatio != 0 && ctx->DimBgRatio != 1 ) )
+            {
+                activeFrames = 3;
+            }
+            else
+            {
+                auto& inputQueue = ctx->InputEventsQueue;
+                if( !inputQueue.empty() )
+                {
+                    for( auto& v : inputQueue )
+                    {
+                        if( v.Type != ImGuiInputEventType_MouseViewport )
+                        {
+                            activeFrames = 3;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if( activeFrames == 0 )
+        {
+            // std::this_thread::sleep_for( std::chrono::milliseconds( 16 ) );
+            ::Sleep(16);
+            continue;
+        }
+        activeFrames--;
+        was_active = false;
+
+
+
+
         ImGui::NewFrame();
 
-        // 1. Show the big demo window (Most of the sample code is in ImGui::ShowDemoWindow()! You can browse its code to learn more about Dear ImGui!).
-        if (show_demo_window)
-            ImGui::ShowDemoWindow(&show_demo_window);
+        ImGuiViewport *viewport = ImGui::GetMainViewport();
+
+        ImGui::SetNextWindowPos(viewport->Pos);
+        ImGui::SetNextWindowSize(viewport->Size);
+
+        float alpha = 0.0625f;
+        smoothed_framerate = smoothed_framerate * (1.0f - alpha) + io.Framerate * alpha;
 
         // 2. Show a simple window that we create ourselves. We use a Begin/End pair to create a named window.
         {
-            ImGui::Begin("Hello, world!");                          // Create a window called "Hello, world!" and append into it.
+            ImGui::Begin("Hello, world!", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_MenuBar);
 
-            ImGui::Checkbox("Demo Window", &show_demo_window);      // Edit bools storing our window open/close state
-
-            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+            ImGui::BeginMenuBar();
+            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / smoothed_framerate, smoothed_framerate);
+            ImGui::EndMenuBar();
 
             {
                 if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_F) && !ImGui::IsAnyItemActive())
                 {
                     ImGui::SetKeyboardFocusHere();
                 }
+                // TODO(irwin): when we have separate input field for search term, restart search if time since last input
+                //              change is greater than ~20-100 ms
                 static char ripgrep_search_command[1024] = "rg.exe --line-number imgui c:\\proj\\cpp";
                 ImGui::InputText("ripgrep_search_command", ripgrep_search_command, IM_ARRAYSIZE(ripgrep_search_command));
+                was_active |= ImGui::IsItemActive();
                 bool run_pressed = ImGui::IsItemDeactivatedAfterEdit();
 
                 run_pressed |= ImGui::Button("Run ripgrep");
@@ -500,6 +555,8 @@ int main(int, char**)
                 ImGui::SameLine();
                 ImGui::Text("%d matches", ripgrep_output_lines.size());
 
+                // TODO(irwin): handle kill command
+                // TODO(irwin): extract start/kill helpers
                 if (run_pressed && !command.started)
                 {
                     ripgrep_output.clear();
@@ -667,6 +724,10 @@ int main(int, char**)
                                         ImGui::TextUnformatted(ripgrep_output.begin() + line.match.first, ripgrep_output.begin() + line.match.one_past_last);
                                         ImGui::PopTextWrapPos();
                                         ImGui::EndTooltip();
+                                    }
+                                    else if (ImGui::IsItemHovered())
+                                    {
+                                        was_active |= true;
                                     }
 
                                 }

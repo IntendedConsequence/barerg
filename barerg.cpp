@@ -533,6 +533,10 @@ int main(int, char**)
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
 
             {
+                if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_F) && !ImGui::IsAnyItemActive())
+                {
+                    ImGui::SetKeyboardFocusHere();
+                }
                 static char ripgrep_search_command[1024] = "rg.exe --line-number imgui c:\\proj\\cpp";
                 ImGui::InputText("ripgrep_search_command", ripgrep_search_command, IM_ARRAYSIZE(ripgrep_search_command));
                 bool run_pressed = ImGui::IsItemDeactivatedAfterEdit();

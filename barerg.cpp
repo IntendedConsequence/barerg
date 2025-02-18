@@ -681,6 +681,14 @@ int main(int, char**)
 
                                     ImGui::TableSetColumnIndex(2);
                                     ImGui::TextUnformatted(ripgrep_output.begin() + line.match.first, ripgrep_output.begin() + line.match.one_past_last);
+                                    if (ImGui::BeginItemTooltip())
+                                    {
+                                        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+                                        ImGui::TextUnformatted(ripgrep_output.begin() + line.match.first, ripgrep_output.begin() + line.match.one_past_last);
+                                        ImGui::PopTextWrapPos();
+                                        ImGui::EndTooltip();
+                                    }
+
                                 }
                             }
                             ImGui::EndTable();

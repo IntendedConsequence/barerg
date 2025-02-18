@@ -44,7 +44,8 @@ set CL=/W4 /WX /Zi /Od /Gm- /diagnostics:caret /options:strict /DWIN32 /D_CRT_SE
 rem set CL=%CL% /fsanitize=address
 
 set LINK=/INCREMENTAL:NO
-rem set "LINK=%LINK% /SUBSYSTEM:WINDOWS"
+set "LINK=%LINK% /SUBSYSTEM:WINDOWS"
+set "LINK=%LINK% /ENTRY:mainCRTStartup"
 set "LINK=%LINK% kernel32.lib"
 set "LINK=%LINK% d3d11.lib d3dcompiler.lib"
 

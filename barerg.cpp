@@ -683,6 +683,20 @@ int main(int, char**)
                                         filepath.append(ripgrep_output.begin() + line.filepath.first, ripgrep_output.begin() + line.filepath.one_past_last);
                                         ImGui::PushID(row);
                                         pressed = ImGui::Selectable(filepath.c_str(), false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowItemOverlap);
+                                        if (ImGui::BeginPopupContextItem())
+                                        {
+                                            if (ImGui::MenuItem("Copy row"))
+                                            {
+                                                ImGuiTextBuffer to_copy;
+                                                to_copy.append(ripgrep_output.begin() + line.filepath.first, ripgrep_output.begin() + line.filepath.one_past_last);
+                                                to_copy.appendf("%s", ":");
+                                                to_copy.append(ripgrep_output.begin() + line.line_number.first, ripgrep_output.begin() + line.line_number.one_past_last);
+                                                to_copy.appendf("%s", ":");
+                                                to_copy.append(ripgrep_output.begin() + line.match.first, ripgrep_output.begin() + line.match.one_past_last);
+                                                ImGui::SetClipboardText(to_copy.c_str());
+                                            }
+                                            ImGui::EndPopup();
+                                        }
                                         ImGui::PopID();
                                     }
 

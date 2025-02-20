@@ -357,6 +357,12 @@ static int parse_rg_stdout(ImGuiTextBuffer *ripgrep_output, ImVector<ParsedLine>
 }
 #endif
 
+void kill_running_command(Command *command)
+{
+    TerminateProcess(command->process_information.hProcess, 0);
+    command->started = false;
+    *command = {0};
+}
 
 // Main code
 int main(int, char**)
@@ -439,6 +445,11 @@ int main(int, char**)
     static ImVector<ParsedLine> ripgrep_output_lines;
 
     float smoothed_framerate = io.Framerate;
+
+    LARGE_INTEGER frequency;
+    QueryPerformanceFrequency(&frequency);
+
+    long long next_search_schedule_when_typing = LLONG_MAX;
 
     // Main loop
     bool done = false;
@@ -543,22 +554,61 @@ int main(int, char**)
                 {
                     ImGui::SetKeyboardFocusHere();
                 }
+                static char ripgrep_query[1024] = "imgui";
+                bool run_pressed = false;
+                if(ImGui::InputText("ripgrep_query", ripgrep_query, IM_ARRAYSIZE(ripgrep_query)))
+                {
+                    LARGE_INTEGER current_timestamp;
+                    QueryPerformanceCounter(&current_timestamp);
+
+                    next_search_schedule_when_typing = current_timestamp.QuadPart + (frequency.QuadPart >> 2);
+                }
+                else
+                {
+                    // run_pressed |= ImGui::IsItemDeactivatedAfterEdit();
+                }
+                was_active |= ImGui::IsItemActive();
+
+                static char ripgrep_dir[1024] = "c:\\proj\\cpp";
+                ImGui::InputText("ripgrep_dir", ripgrep_dir, IM_ARRAYSIZE(ripgrep_dir));
+                was_active |= ImGui::IsItemActive();
+                run_pressed |= ImGui::IsItemDeactivatedAfterEdit();
+
                 // TODO(irwin): when we have separate input field for search term, restart search if time since last input
                 //              change is greater than ~20-100 ms
-                static char ripgrep_search_command[1024] = "rg.exe --line-number imgui c:\\proj\\cpp";
+                static bool ignore_case = false;
+                run_pressed |= ImGui::Checkbox("ignore_case", &ignore_case);
+                ImGui::SameLine();
+
+                static char ripgrep_search_command[1024] = "rg.exe --line-number";
                 ImGui::InputText("ripgrep_search_command", ripgrep_search_command, IM_ARRAYSIZE(ripgrep_search_command));
                 was_active |= ImGui::IsItemActive();
-                bool run_pressed = ImGui::IsItemDeactivatedAfterEdit();
+                run_pressed |= ImGui::IsItemDeactivatedAfterEdit();
 
                 run_pressed |= ImGui::Button("Run ripgrep");
+                ImGui::SameLine();
+                ImGui::BeginDisabled(!command.started);
+                if(ImGui::Button("Stop"))
+                {
+                    kill_running_command(&command);
+                }
+                ImGui::EndDisabled();
+
 
                 ImGui::SameLine();
                 ImGui::Text("%d matches", ripgrep_output_lines.size());
 
-                // TODO(irwin): handle kill command
                 // TODO(irwin): extract start/kill helpers
-                if (run_pressed && !command.started)
+
+                LARGE_INTEGER current_timestamp;
+                QueryPerformanceCounter(&current_timestamp);
+                if (run_pressed || current_timestamp.QuadPart >= next_search_schedule_when_typing)
                 {
+                    next_search_schedule_when_typing = LLONG_MAX;
+                    if (command.started)
+                    {
+                        kill_running_command(&command);
+                    }
                     ripgrep_output.clear();
                     ripgrep_output_lines.clear();
 
@@ -589,8 +639,17 @@ int main(int, char**)
                             // const char command_string[] = "cmd /c echo hello";
                             const char working_dir[] = "c:\\proj\\cpp";
 
+                            ImGuiTextBuffer command_builder;
+                            command_builder.append(ripgrep_search_command);
+                            if (ignore_case)
+                            {
+                                command_builder.append(" -i");
+                            }
+                            command_builder.appendf(" %s", ripgrep_query);
+                            command_builder.appendf(" %s", ripgrep_dir);
+
                             wchar_t *command_string_wide = 0;
-                            UTF8_ToWidechar(&command_string_wide, ripgrep_search_command);
+                            UTF8_ToWidechar(&command_string_wide, command_builder.c_str());
 
                             if (command_string_wide)
                             {
@@ -621,7 +680,7 @@ int main(int, char**)
                     }
 
                 }
-                if (!ripgrep_output_lines.empty())
+                // if (!ripgrep_output_lines.empty())
                 {
                     // if (ImGui::BeginChild("ripgrep output"))
                     {
@@ -639,14 +698,20 @@ int main(int, char**)
                         // When using ScrollX or ScrollY we need to specify a size for our table container!
                         // Otherwise by default the table will fit all available space, like a BeginChild() call.
                         ImVec2 outer_size = ImVec2(0.0f, 0.0f);
-                        if (ImGui::BeginTable("ripgrep_table", 3, flags, outer_size))
+                        if (ImGui::BeginTable("ripgrep_table", 4, flags, outer_size))
                         {
                             ImGui::TableSetupScrollFreeze(0, 1); // Make top row always visible
+                            ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_None);
                             ImGui::TableSetupColumn("Path", ImGuiTableColumnFlags_None);
                             ImGui::TableSetupColumn("Line", ImGuiTableColumnFlags_None);
                             ImGui::TableSetupColumn("Match", ImGuiTableColumnFlags_None);
                             // ImGui::TableSetupColumn("Three", ImGuiTableColumnFlags_None);
                             ImGui::TableHeadersRow();
+
+                            // if (ripgrep_output_lines.empty())
+                            // {
+                            //     ImGui::TableNextRow();
+                            // }
 
                             // Demonstrate using clipper for large vertical lists
                             ImGuiListClipper clipper;
@@ -660,8 +725,11 @@ int main(int, char**)
 #if 0
 #else
 
-                                    bool pressed = false;
                                     ImGui::TableSetColumnIndex(0);
+                                    ImGui::Text("%d", row+1);
+
+                                    bool pressed = false;
+                                    ImGui::TableSetColumnIndex(1);
                                     {
                                         ImGuiTextBuffer filepath;
                                         filepath.append(ripgrep_output.begin() + line.filepath.first, ripgrep_output.begin() + line.filepath.one_past_last);
@@ -684,7 +752,7 @@ int main(int, char**)
                                         ImGui::PopID();
                                     }
 
-                                    ImGui::TableSetColumnIndex(1);
+                                    ImGui::TableSetColumnIndex(2);
                                     {
                                         const char *line_first = ripgrep_output.begin() + line.line_number.first;
                                         const char *line_one_past_last = ripgrep_output.begin() + line.line_number.one_past_last;
@@ -716,7 +784,7 @@ int main(int, char**)
                                     // ImGui::Text("%.*s", line_one_past_last - line_first, line_first);
 
 
-                                    ImGui::TableSetColumnIndex(2);
+                                    ImGui::TableSetColumnIndex(3);
                                     ImGui::TextUnformatted(ripgrep_output.begin() + line.match.first, ripgrep_output.begin() + line.match.one_past_last);
                                     if (ImGui::BeginItemTooltip())
                                     {
@@ -737,9 +805,9 @@ int main(int, char**)
                     }
                     // ImGui::EndChild();
                 }
-                else
+                // else
                 {
-                    ImGui::Text("Ripgrep output empty");
+                    // ImGui::Text("Ripgrep output empty");
                 }
             }
 
@@ -762,27 +830,45 @@ int main(int, char**)
 
         if (command.started)
         {
-            DWORD read;
-            const int BUFSIZE = 4096;
-            char chBuf[BUFSIZE] = {};
+            bool first_bytes_arrived = !ripgrep_output.empty();
+            if (!first_bytes_arrived)
+            {
+                DWORD bytes_available = 0;
+                BOOL peek_success = PeekNamedPipe(
+                    command.stdout_read,      //HANDLE  hNamedPipe,
+                    NULL,             //LPVOID  lpBuffer,
+                    0,                //DWORD   nBufferSize,
+                    NULL,             //LPDWORD lpBytesRead,
+                    &bytes_available, //LPDWORD lpTotalBytesAvail,
+                    NULL              //LPDWORD lpBytesLeftThisMessage
+                );
+                IM_UNUSED(peek_success);
 
-#if 0
-#else
-            if (ReadFile(command.stdout_read, chBuf, BUFSIZE, &read, NULL))
-            {
-                ripgrep_output.append(&chBuf[0], &chBuf[0] + read);
-                int lines_parsed = parse_rg_stdout(&ripgrep_output, &ripgrep_output_lines);
-                IM_UNUSED(lines_parsed);
+                first_bytes_arrived = bytes_available > 0;
             }
-            else
+
+            // NOTE(irwin): prevent ReadFile ui lag on process creation
+            if (first_bytes_arrived)
             {
-                command.started = false;
-                CloseHandle(command.stdout_read);
+                DWORD read;
+                const int BUFSIZE = 4096;
+                char chBuf[BUFSIZE] = {};
+
+                if (ReadFile(command.stdout_read, chBuf, BUFSIZE, &read, NULL))
                 {
+                    ripgrep_output.append(&chBuf[0], &chBuf[0] + read);
+                    int lines_parsed = parse_rg_stdout(&ripgrep_output, &ripgrep_output_lines);
+                    IM_UNUSED(lines_parsed);
+                }
+                else
+                {
+                    command.started = false;
+                    CloseHandle(command.stdout_read);
+                    {
+                    }
                 }
             }
 
-#endif
         }
 
 

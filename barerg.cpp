@@ -440,6 +440,7 @@ int main(int, char**)
     // Our state
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
+    // TODO(irwin): move main logic into its own file to decouple from d3d11 backend
     Command command = {0};
     static ImGuiTextBuffer ripgrep_output;
     static ImVector<ParsedLine> ripgrep_output_lines;
@@ -851,7 +852,7 @@ int main(int, char**)
             if (first_bytes_arrived)
             {
                 DWORD read;
-                const int BUFSIZE = 4096;
+                const int BUFSIZE = 8192;
                 char chBuf[BUFSIZE] = {};
 
                 if (ReadFile(command.stdout_read, chBuf, BUFSIZE, &read, NULL))
